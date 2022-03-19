@@ -1,5 +1,5 @@
 #define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include <GLFW/glfw3.h> // includes Vulkan API because of line above
 
 #include <iostream>
 #include <stdexcept>
@@ -34,6 +34,9 @@ private:
 	GLFWwindow* window;
 	VkInstance instance;
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+	VkDevice device;
+	VkQueue graphicsQueue;
+	VkSurfaceKHR surface;
 
 	void initWindow() {
 		glfwInit();
@@ -46,19 +49,15 @@ private:
 
 	void initVulkan() {
 		createInstance();
+		createSurface();
 		pickPhysicalDevice();
+		createLogicalDevice();
 	}
 
 	void mainLoop() {
 		while(!glfwWindowShouldClose(window)) {
 			glfwPollEvents();
 		}
-	}
-
-	void cleanup() {
-		vkDestroyInstance(instance, nullptr);
-		glfwDestroyWindow(window);
-		glfwTerminate();
 	}
 
 	void createInstance() {
@@ -146,6 +145,12 @@ private:
 		return true;
 	}
 
+	void createSurface() {
+		if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create window surface");
+		}
+	}
+
 	void pickPhysicalDevice() {
 		// TODO: make this better? Read https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Physical_devices_and_queue_families
 
@@ -206,6 +211,53 @@ private:
 		}
 
 		return indices;
+	}
+
+	void createLogicalDevice() {
+		QueueFamilyIndices indices = findQueueFamilies(physicalDevice); // duplicate code
+
+		// spec queues to create
+		float queuePriority = 1.0f;
+		VkDeviceQueueCreateInfo queueCreateInfo{
+			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+			.queueFamilyIndex = indices.graphicsFamily.value(),
+			.queueCount = 1,
+			.pQueuePriorities = &queuePriority,
+		};
+
+		// spec features to use
+		VkPhysicalDeviceFeatures deviceFeatures{};
+
+		VkDeviceCreateInfo createInfo{
+			.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &queueCreateInfo,
+			.enabledExtensionCount = 0,
+			.pEnabledFeatures = &deviceFeatures,
+		};
+
+		// validation layers
+		if (enableValidationLayers) {
+			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+			// for compatability with old Vulkan implementations
+			createInfo.ppEnabledLayerNames = validationLayers.data();
+		} else {
+			createInfo.enabledLayerCount = 0;
+		}
+
+		if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
+			throw std::runtime_error("failed to create logical device");
+		}
+
+		vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+	}
+
+	void cleanup() {
+		vkDestroyDevice(device, nullptr);
+		vkDestroySurfaceKHR(instance, surface, nullptr);
+		vkDestroyInstance(instance, nullptr);
+		glfwDestroyWindow(window);
+		glfwTerminate();
 	}
 };
 
