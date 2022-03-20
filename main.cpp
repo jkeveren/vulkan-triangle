@@ -39,12 +39,15 @@ private:
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
 	VkSurfaceKHR surface;
+	const std::vector<const char*> deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME // KHR swapchain
+	};
 
 	void initWindow() {
 		glfwInit();
 		// disable OpenGL
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		// disable window resize until handle later
+		// disable window resize for now (complex to implement?)
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Triangle", nullptr, nullptr);
 	}
@@ -86,6 +89,7 @@ private:
 			.ppEnabledExtensionNames = glfwExtensions,
 		};
 
+		// include validation layers if enabled
 		if (enableValidationLayers) {
 			createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 			createInfo.ppEnabledLayerNames = validationLayers.data();
@@ -98,20 +102,17 @@ private:
 			throw std::runtime_error("failed to create Vulkan instance");
 		}
 
-		// Check for Extension Support
-		// get number of extensions in vulkan instance.
-		uint32_t extensionCount = 0;
-		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-
-		// get array of extensions
-		std::vector<VkExtensionProperties> extensions(extensionCount);
-		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+		// get instance extensions
+		uint32_t instanceExtensionCount = 0;
+		vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, nullptr);
+		std::vector<VkExtensionProperties> instanceExtensions(instanceExtensionCount);
+		vkEnumerateInstanceExtensionProperties(nullptr, &instanceExtensionCount, instanceExtensions.data());
 
 		// check that required extenions are present
 		for (int i = 0; i < glfwExtensionCount; i++) {
 			const char* glfwExtension = glfwExtensions[i];
 			bool found = false;
-			for (const VkExtensionProperties& instanceExtension : extensions) {
+			for (const VkExtensionProperties& instanceExtension : instanceExtensions) {
 				if (std::strcmp(glfwExtension, instanceExtension.extensionName) == 0) {
 					found = true;
 					break;
@@ -126,11 +127,13 @@ private:
 	}
 
 	bool checkValidationLayerSupport() {
-		uint32_t layerCount;
-		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-		std::vector<VkLayerProperties> availableLayers(layerCount);
-		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+		// get available layers
+		uint32_t n;
+		vkEnumerateInstanceLayerProperties(&n, nullptr);
+		std::vector<VkLayerProperties> availableLayers(n);
+		vkEnumerateInstanceLayerProperties(&n, availableLayers.data());
 
+		// ensure all validation layers are present
 		for (const char* name : validationLayers) {
 			bool found = false;
 			for (const VkLayerProperties layerProperties : availableLayers) {
@@ -175,6 +178,7 @@ private:
 			}
 		}
 
+		// check that a device was selected
 		if (physicalDevice == VK_NULL_HANDLE) {
 			throw std::runtime_error("failed to find suitable GPU");
 		}
@@ -184,26 +188,32 @@ private:
 		std::optional<uint32_t> graphicsFamily;
 		std::optional<uint32_t> presentFamily;
 
+		// check that all families have been found
 		bool isComplete() {
-			return graphicsFamily.has_value()
+			return
+				graphicsFamily.has_value()
 				&& presentFamily.has_value()
 			;
 		}
 	};
 
 	bool isDeviceSuitable(VkPhysicalDevice device) {
-		QueueFamilyIndices indices = findQueueFamilies(device);
-		return indices.isComplete();
+		return
+			findQueueFamilies(device).isComplete()
+			&& checkDeviceExtensionSupport(device)
+		;
 	}
 
 	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
 		QueueFamilyIndices indices;
 
-		uint32_t queueFamilyCount = 0;
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+		// get queue families
+		uint32_t n = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &n, nullptr);
+		std::vector<VkQueueFamilyProperties> queueFamilies(n);
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &n, queueFamilies.data());
 
+		// find index of queue family that supports required features
 		int i = 0;
 		for (const VkQueueFamilyProperties& family : queueFamilies) {
 			// graphics support
@@ -218,6 +228,7 @@ private:
 				indices.presentFamily = i;
 			}
 
+			// break once found all
 			if (indices.isComplete()) {
 				break;
 			}
@@ -226,6 +237,24 @@ private:
 		}
 
 		return indices;
+	}
+
+	bool checkDeviceExtensionSupport(VkPhysicalDevice device) {
+		// get available extensions
+		uint32_t n;
+		vkEnumerateDeviceExtensionProperties(device, nullptr, &n, nullptr);
+		std::vector<VkExtensionProperties> availableExtensions(n);
+		vkEnumerateDeviceExtensionProperties(device, nullptr, &n, availableExtensions.data());
+
+		// make copy of deviceExtensions
+		std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
+
+		// erase required extensions that are fulfilled
+		for (const VkExtensionProperties& extension : availableExtensions) {
+			requiredExtensions.erase(extension.extensionName);
+		}
+
+		return requiredExtensions.empty();
 	}
 
 	void createLogicalDevice() {
@@ -256,7 +285,8 @@ private:
 			.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 			.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()),
 			.pQueueCreateInfos = queueCreateInfos.data(),
-			.enabledExtensionCount = 0,
+			.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
+			.ppEnabledExtensionNames = deviceExtensions.data(),
 			.pEnabledFeatures = &deviceFeatures,
 		};
 
